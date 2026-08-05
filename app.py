@@ -116,11 +116,30 @@ if target_file and reference_files:
 
         for ref_file in reference_files:
             df_ref = load_data(ref_file)
-            active_ref = df_ref[df_ref['abs'] > threshold]
+            
+            # --- AUTOMAÇÃO 1: Ajuste de Limiar ---
+            # Verifica se o limiar definido exclui todos os dados da referência e reduz automaticamente.
+            local_threshold = threshold
+            if df_ref['abs'].max() <= threshold:
+                local_threshold = df_ref['abs'].min()
+                st.toast(f"Limiar de {ref_file.name} ajustado automaticamente (dados com absorbância baixa).")
+                
+            active_ref = df_ref[df_ref['abs'] > local_threshold]
 
             if not active_ref.empty:
                 nm_min, nm_max = active_ref['nm'].min(), active_ref['nm'].max()
-                mask_target = (df_target_full['nm'] >= nm_min) & (df_target_full['nm'] <= nm_max)
+                
+                # --- AUTOMAÇÃO 2: Verificação de Interseção de Comprimento de Onda ---
+                # Verifica se as curvas realmente se sobrepõem antes de prosseguir
+                if nm_min > df_target_full['nm'].max() or nm_max < df_target_full['nm'].min():
+                    st.warning(f"⚠️ Ignorado: A amostra e a referência '{ref_file.name}' não possuem cruzamento na faixa de nm.")
+                    continue
+                
+                # Calcula exatamente a janela de interseção válida para evitar falhas no interp1d
+                nm_min_inter = max(nm_min, df_target_full['nm'].min())
+                nm_max_inter = min(nm_max, df_target_full['nm'].max())
+                
+                mask_target = (df_target_full['nm'] >= nm_min_inter) & (df_target_full['nm'] <= nm_max_inter)
                 df_target_window = df_target_full[mask_target]
 
                 if not df_target_window.empty:
@@ -143,7 +162,7 @@ if target_file and reference_files:
 
                     results.append({
                         "Arquivo": ref_file.name,
-                        "Janela (nm)": f"{int(nm_min)}-{int(nm_max)}",
+                        "Janela (nm)": f"{int(nm_min_inter)}-{int(nm_max_inter)}",
                         "Correlação": round(correlation, 4)
                     })
                     
@@ -154,7 +173,7 @@ if target_file and reference_files:
         fig.update_layout(xaxis_title="Comprimento de Onda (nm)", yaxis_title="Absorbância",
                           template="plotly_white", legend=dict(orientation="h", y=-0.2))
 
-        # --- TRAVA DE SEGURANÇA (evita o erro se nenhum resultado for gerado) ---
+        # --- TRAVA DE SEGURANÇA ---
         if len(results) > 0:
             col1, col2 = st.columns([2, 1])
             res_df = pd.DataFrame(results).sort_values(by="Correlação", ascending=False)
@@ -172,11 +191,11 @@ if target_file and reference_files:
                         pdf_bytes = generate_pdf(res_df, target_file.name, user_notes, fig)
                         st.download_button("Baixar Relatório Completo (PDF)",
                                            data=pdf_bytes,
-                                           file_name="relatório_correlação.pdf",
+                                           file_name="relatorio_correlacao.pdf",
                                            mime="application/pdf",
                                            use_container_width=True)
         else:
-            st.warning("⚠️ Nenhuma correlação foi gerada. Verifique se o Limiar de Atividade está alto demais ou se os comprimentos de onda não coincidem.")
+            st.error("⚠️ Não foi possível calcular a correlação. Verifique se os dados são válidos nas faixas indicadas.")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
