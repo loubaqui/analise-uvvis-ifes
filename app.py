@@ -9,7 +9,6 @@ from datetime import datetime
 
 st.set_page_config(page_title="IC Física - IFES", layout="wide")
 
-
 # --- FUNÇÃO DE CARREGAMENTO ---
 def load_data(file):
     try:
@@ -33,7 +32,6 @@ def load_data(file):
     except Exception as e:
         raise Exception(f"Erro ao processar {file.name}: {e}")
 
-
 # --- FUNÇÃO DO PDF COM GRÁFICO ---
 def generate_pdf(results_df, target_name, user_comments, fig_plotly):
     pdf = FPDF()
@@ -41,9 +39,9 @@ def generate_pdf(results_df, target_name, user_comments, fig_plotly):
 
     # Cabeçalho
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(190, 10, "IFES - Instituto Federal do Espírito Santo", ln=True, align='C')
+    pdf.cell(190, 10, "IFES - Instituto Federal do Espirito Santo", ln=True, align='C')
     pdf.set_font("Arial", "I", 11)
-    pdf.cell(190, 10, "Relatorio de Iniciação Científica - Física", ln=True, align='C')
+    pdf.cell(190, 10, "Relatorio de Iniciacao Cientifica - Fisica", ln=True, align='C')
 
     pdf.set_font("Arial", size=10)
     pdf.ln(5)
@@ -63,7 +61,7 @@ def generate_pdf(results_df, target_name, user_comments, fig_plotly):
     # Tabela de Resultados
     pdf.set_font("Arial", "B", 11)
     pdf.set_fill_color(230, 230, 230)
-    pdf.cell(80, 10, "Referência", border=1, fill=True)
+    pdf.cell(80, 10, "Referencia", border=1, fill=True)
     pdf.cell(55, 10, "Janela (nm)", border=1, fill=True)
     pdf.cell(45, 10, "Correlacao (r)", border=1, fill=True)
     pdf.ln()
@@ -78,16 +76,15 @@ def generate_pdf(results_df, target_name, user_comments, fig_plotly):
     if user_comments:
         pdf.ln(5)
         pdf.set_font("Arial", "B", 11)
-        pdf.cell(190, 10, "Observações:", ln=True)
+        pdf.cell(190, 10, "Observacoes:", ln=True)
         pdf.set_font("Arial", size=10)
         pdf.multi_cell(190, 7, user_comments)
 
     pdf.ln(10)
     pdf.set_font("Arial", "B", 10)
-    pdf.cell(190, 10, "Instituição: IFES", align='C', ln=True)
+    pdf.cell(190, 10, "Instituicao: IFES", align='C', ln=True)
 
     return bytes(pdf.output())
-
 
 # --- INTERFACE ---
 st.title("🧪 Analisador UV-Vis IFES")
@@ -95,7 +92,12 @@ st.title("🧪 Analisador UV-Vis IFES")
 st.sidebar.header("1. Dados")
 target_file = st.sidebar.file_uploader("Amostra Alvo", type=["csv"])
 reference_files = st.sidebar.file_uploader("Referências", type=["csv"], accept_multiple_files=True)
+
+st.sidebar.divider()
+st.sidebar.header("2. Configurações")
 threshold = st.sidebar.slider("Limiar de Atividade", 0.0, 0.1, 0.01)
+normalizar = st.sidebar.checkbox("Normalizar Absorbância (Visual)", value=True, help="Desloca e estica a curva de referência para o mesmo range da amostra alvo, facilitando a comparação visual.")
+
 user_notes = st.sidebar.text_area("Notas do Pesquisador:")
 
 if target_file and reference_files:
@@ -103,6 +105,10 @@ if target_file and reference_files:
         df_target_full = load_data(target_file)
         results = []
         fig = go.Figure()
+
+        # Pegamos os valores max e min da amostra alvo para usar como base de deslocamento
+        tgt_min = df_target_full['abs'].min()
+        tgt_max = df_target_full['abs'].max()
 
         # Linha principal da amostra
         fig.add_trace(go.Scatter(x=df_target_full['nm'], y=df_target_full['abs'],
@@ -118,6 +124,19 @@ if target_file and reference_files:
                 df_target_window = df_target_full[mask_target]
 
                 if not df_target_window.empty:
+                    # --- LÓGICA DE DESLOCAMENTO VISUAL ---
+                    if normalizar:
+                        ref_min = df_ref['abs'].min()
+                        ref_max = df_ref['abs'].max()
+                        if ref_max > ref_min: # Evita divisão por zero
+                            # Fórmula de normalização Min-Max mapeada para a amostra alvo
+                            df_ref['abs_plot'] = (df_ref['abs'] - ref_min) / (ref_max - ref_min) * (tgt_max - tgt_min) + tgt_min
+                        else:
+                            df_ref['abs_plot'] = df_ref['abs']
+                    else:
+                        df_ref['abs_plot'] = df_ref['abs']
+
+                    # O cálculo estatístico continua usando os dados verdadeiros, interpolados
                     f_interp = interp1d(df_ref['nm'], df_ref['abs'], bounds_error=False, fill_value=0)
                     abs_ref_aligned = f_interp(df_target_window['nm'])
                     correlation = np.corrcoef(df_target_window['abs'], abs_ref_aligned)[0, 1]
@@ -127,32 +146,37 @@ if target_file and reference_files:
                         "Janela (nm)": f"{int(nm_min)}-{int(nm_max)}",
                         "Correlação": round(correlation, 4)
                     })
-                    # Adiciona referência ao gráfico (visível por padrão para o PDF)
-                    fig.add_trace(go.Scatter(x=df_ref['nm'], y=df_ref['abs'],
+                    
+                    # O gráfico é plotado usando a curva visualmente deslocada (abs_plot)
+                    fig.add_trace(go.Scatter(x=df_ref['nm'], y=df_ref['abs_plot'],
                                              name=f"Ref: {ref_file.name}", opacity=0.6))
 
         fig.update_layout(xaxis_title="Comprimento de Onda (nm)", yaxis_title="Absorbância",
                           template="plotly_white", legend=dict(orientation="h", y=-0.2))
 
-        col1, col2 = st.columns([2, 1])
-        res_df = pd.DataFrame(results).sort_values(by="Correlação", ascending=False)
+        # --- TRAVA DE SEGURANÇA (evita o erro se nenhum resultado for gerado) ---
+        if len(results) > 0:
+            col1, col2 = st.columns([2, 1])
+            res_df = pd.DataFrame(results).sort_values(by="Correlação", ascending=False)
 
-        with col1:
-            st.plotly_chart(fig, use_container_width=True)
+            with col1:
+                st.plotly_chart(fig, use_container_width=True)
 
-        with col2:
-            st.subheader("Análise")
-            st.dataframe(res_df, use_container_width=True, hide_index=True)
-            if not res_df.empty:
-                st.divider()
-                # Geração do PDF passando o objeto 'fig'
-                with st.spinner('Gerando PDF com gráfico...'):
-                    pdf_bytes = generate_pdf(res_df, target_file.name, user_notes, fig)
-                    st.download_button("Baixar Relatório Completo (PDF)",
-                                       data=pdf_bytes,
-                                       file_name="relatório_correlação.pdf",
-                                       mime="application/pdf",
-                                       use_container_width=True)
+            with col2:
+                st.subheader("Análise")
+                st.dataframe(res_df, use_container_width=True, hide_index=True)
+                if not res_df.empty:
+                    st.divider()
+                    # Geração do PDF passando o objeto 'fig'
+                    with st.spinner('Gerando PDF com gráfico...'):
+                        pdf_bytes = generate_pdf(res_df, target_file.name, user_notes, fig)
+                        st.download_button("Baixar Relatório Completo (PDF)",
+                                           data=pdf_bytes,
+                                           file_name="relatório_correlação.pdf",
+                                           mime="application/pdf",
+                                           use_container_width=True)
+        else:
+            st.warning("⚠️ Nenhuma correlação foi gerada. Verifique se o Limiar de Atividade está alto demais ou se os comprimentos de onda não coincidem.")
 
     except Exception as e:
         st.error(f"Erro no processamento: {e}")
